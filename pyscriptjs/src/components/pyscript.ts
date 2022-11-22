@@ -3,6 +3,7 @@ import type { Runtime } from '../runtime';
 import { getLogger } from '../logger';
 import { pyExec } from '../pyexec';
 import { FetchError, _createAlertBanner } from '../exceptions';
+import {PyodideRuntime} from '../pyodide';
 
 const logger = getLogger('py-script');
 
@@ -18,7 +19,7 @@ export function make_PyScript(runtime: Runtime) {
         async getPySrc(): Promise<string> {
             if (this.hasAttribute('src')) {
                 const url = this.getAttribute('src');
-                const response = await fetch(url);
+                const response = await (runtime as PyodideRuntime).safeFetch(url);
                 if (response.status !== 200) {
                     const errorMessage = (
                         `Failed to fetch '${url}' - Reason: ` +

@@ -118,3 +118,19 @@ export function createDeprecationWarning(msg: string, elementName: string): void
         _createAlertBanner(msg, "warning");
     }
 }
+
+function browserSupportsLocalFS(): boolean {
+    // @ts-ignore
+    return typeof window.showDirectoryPicker === 'function';
+}
+
+export function shouldSelectPythonPath(): boolean {
+    return browserSupportsLocalFS() && document.location.protocol === 'file:';
+}
+
+export function getRawFileName(filename: string): string {
+    while(filename.substring(0, 1) === '.' || filename.substring(0, 1) === '/') {
+        filename = filename.substring(1);
+    }
+    return filename;
+}

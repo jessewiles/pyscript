@@ -7,7 +7,7 @@ import type { loadPyodide as loadPyodideDeclaration, PyodideInterface, PyProxy }
 import pyscript from './python/pyscript.py';
 import type { AppConfig } from './pyconfig';
 import type { Stdio } from './stdio';
-
+import { shouldSelectPythonPath, getRawFileName } from './utils';
 declare const loadPyodide: typeof loadPyodideDeclaration;
 
 const logger = getLogger('pyscript/pyodide');
@@ -17,6 +17,46 @@ interface Micropip {
     destroy: () => void;
 }
 
+interface SafeFetchResult {
+    status: number;
+    statusText: string;
+    arrayBuffer(): Promise<ArrayBuffer>;
+    text(): Promise<string>;
+}
+
+class LocalFileResult {
+    localFile: File;
+    status: number = 200;
+    statusText: string = "OK";
+
+    constructor(localFile: File) {
+        this.localFile = localFile;
+    }
+
+    arrayBuffer(): Promise<ArrayBuffer> {
+        return new Promise(async (resolve) => {
+            let ab = await this.localFile.arrayBuffer();
+            let dec = new TextDecoder();
+            localStorage.setItem(this.name, dec.decode(ab));
+            resolve(ab)
+        });
+    }
+
+    text(): Promise<string> {
+        return new Promise(async (resolve) => {
+            let ab = await this.localFile.arrayBuffer();
+            let dec = new TextDecoder();
+            let content = dec.decode(ab);
+            localStorage.setItem(this.name, content);
+            resolve(content)
+        });
+    }
+
+    get name(): string {
+        return getRawFileName(this.localFile.name);
+    }
+}
+
 export class PyodideRuntime extends Runtime {
     src: string;
     stdio: Stdio;
@@ -24,6 +64,7 @@ export class PyodideRuntime extends Runtime {
     lang?: string;
     interpreter: PyodideInterface;
     globals: PyProxy;
+    pythonPath: FileSystemDirectoryHandle;
 
     constructor(
         config: AppConfig,
@@ -110,7 +151,7 @@ export class PyodideRuntime extends Runtime {
                 this.interpreter.FS.mkdir(eachPath);
             }
         }
-        const response = await fetch(fetch_path);
+        const response = await this.safeFetch(fetch_path);
         if (response.status !== 200) {
             throw new FetchError(`Unable to fetch  ${fetch_path}, reason: ${response.status} - ${response.statusText}`);
         }
@@ -120,5 +161,114 @@ export class PyodideRuntime extends Runtime {
         const stream = this.interpreter.FS.open(pathArr.join('/'), 'w');
         this.interpreter.FS.write(stream, data, 0, data.length, 0);
         this.interpreter.FS.close(stream);
+    }
+
+    async safeFetch(s: string): Promise<SafeFetchResult> {
+        let response: SafeFetchResult; 
+
+        if (shouldSelectPythonPath()) {
+            if (this.hasCachedLocalFile(s)) {
+                response= this.getCachedLocalFile(s);
+            } else {
+                response = new LocalFileResult(await this.getSourceFromLocalFile(s));
+            }
+        } else {
+            response = await fetch(s);
+        }
+        return response;
+    }
+
+    async getSourceFromLocalFile(s: string): Promise<File> {
+        let response: File;
+        if (this.pythonPath === undefined) {
+            this.pythonPath = await this.showSelectPythonPath();
+        }
+
+        const parts: string[] = s.split('/').filter((i) => i !== '.' && i !== '..').reverse();
+        let startingDir: FileSystemDirectoryHandle = this.pythonPath;
+        let segment: string = parts.pop();
+
+        // Drill into the hierarchy
+        // TODO: The next two sections need TLC; could be DRYer.
+        while(!segment.endsWith(".py")) {
+            // @ts-ignore
+            const entries: Iterator<FileSystemDirectoryEntry> = await startingDir.entries();
+            // @ts-ignore
+            let entry: FileSystemDirectoryEntry = await entries.next();
+            // @ts-ignore
+            while(!entry.done) {
+                // @ts-ignore
+                if (entry.value[0] === segment) {
+                    // @ts-ignore
+                    startingDir = entry.value[1];
+                    break;
+                }
+                // @ts-ignore
+                entry = await entries.next();
+            }
+            segment = parts.pop();
+        }
+
+        // @ts-ignore
+        const entries: Iterator<FileSystemDirectoryEntry> = await startingDir.entries();
+        // @ts-ignore
+        let entry: FileSystemDirectoryEntry = await entries.next();
+        // @ts-ignore
+        while(!entry.done) {
+            // @ts-ignore
+            if (entry.value && entry.value[0] === segment) {
+                // @ts-ignore
+                response = await entry.value[1].getFile();
+                break;
+            }
+            // @ts-ignore
+            entry = await entries.next();
+        }
+
+        return response;
+    }
+
+    showSelectPythonPath(): Promise<FileSystemDirectoryHandle> {
+        return new Promise((resolve) => {
+            let localModal = document.createElement('div');
+            localModal.className = 'local-modal';
+
+            let modalContent = document.createElement('div');
+            modalContent.className = 'modal-content';
+
+            let message = document.createElement('p');
+            message.innerHTML = "When running locally, it is necessary for the user to select the directory "+
+                "(PYTHONPATH) from which to load additional modules/scripts. To select the directory, click the "+
+                "button below.";
+
+            let button = document.createElement('button')
+            let setPythonPathCB = (handle: FileSystemDirectoryHandle) => resolve(handle);
+            button.onclick = async function() {
+                // @ts-ignore
+                let _dir = await window.showDirectoryPicker();
+                // @ts-ignore
+                setTimeout(() => {
+                    setPythonPathCB(_dir);
+                    document.body.removeChild(localModal);
+                }, 100);
+            }
+            button.innerHTML = "Set Python Path";
+
+            modalContent.appendChild(message);
+            modalContent.appendChild(button);
+            localModal.appendChild(modalContent);
+            document.body.insertBefore(localModal, document.body.childNodes[0]);
+        });
+    }
+
+    hasCachedLocalFile(filename: string): boolean {
+        return localStorage.getItem(getRawFileName(filename)) !== null;
+    }
+
+    getCachedLocalFile(filename: string): LocalFileResult {
+        let raw: string = getRawFileName(filename);
+        return new LocalFileResult(
+            new File([localStorage.getItem(raw)], raw, {type: "text/plain"})
+        );
     }
 }

@@ -332,3 +332,19 @@ textarea {
 .py-terminal-hidden {
     display: none;
 }
+
+.local-modal {
+    position: absolute;
+    height: 100%;
+    width: 100%;
+    background-color: rgba(0,0,0,0.8);
+    z-index: 1000;
+}
+.modal-content {
+    position: relative;
+    margin: auto;
+    top: 3in;
+    width: 70%;
+    text-align: center;
+    color: white;
+}
